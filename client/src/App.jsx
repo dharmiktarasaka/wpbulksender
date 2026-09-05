@@ -250,7 +250,7 @@ export default function App() {
     }
   }
 
-  const isWaConnected = waStatus === 'open';
+  const isWaConnected = waStatus === 'open' || (waStatus === 'connecting' && Boolean(waUser));
   const isCampaignRunning =
     activeCampaign && (activeCampaign.state === 'running' || activeCampaign.state === 'paused');
 

@@ -19,6 +19,13 @@ export default function ConnectionTab({
   onShowToast,
   onNext
 }) {
+  // Automatically request QR code / session init if disconnected and no QR is loaded
+  React.useEffect(() => {
+    if (!waConnected && !waQr && waStatus === 'disconnected') {
+      apiFetch('/api/whatsapp/init', { method: 'POST' }).catch(() => {});
+    }
+  }, [waConnected, waQr, waStatus]);
+
   async function handleRefresh() {
     onShowToast('Initializing WhatsApp connection...', 'info');
     try {
@@ -29,10 +36,10 @@ export default function ConnectionTab({
   }
 
   async function handleLogout() {
-    if (confirm('Are you sure you want to log out and disconnect WhatsApp?')) {
+    if (confirm('Are you sure you want to unlink your WhatsApp account? This will disconnect your active session.')) {
       try {
         await apiFetch('/api/whatsapp/logout', { method: 'POST' });
-        onShowToast('Logged out successfully', 'info');
+        onShowToast('WhatsApp unlinked successfully', 'info');
       } catch (err) {
         onShowToast('Logout error: ' + err.message, 'error');
       }
@@ -107,7 +114,7 @@ export default function ConnectionTab({
                 </div>
                 <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                   <button className="btn btn-danger btn-sm" onClick={handleLogout}>
-                    <LogOut size={15} /> Disconnect Session
+                    <LogOut size={15} /> Unlink WhatsApp
                   </button>
                   <button className="btn btn-primary btn-sm" onClick={onNext}>
                     Proceed to Contacts ➔

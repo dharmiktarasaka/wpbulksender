@@ -100,6 +100,11 @@ io.on('connection', (socket) => {
   const userWa = waManager.getWhatsAppManager(sessionId, io);
   const userQueue = campaignQueue.getCampaignQueue(sessionId, userWa, io);
 
+  // If user already has credentials stored, auto-connect silently
+  if (userWa.hasValidSession() && userWa.connectionState === 'disconnected') {
+    userWa.init().catch(() => {});
+  }
+
   // Emit current states ONLY to this specific connecting client
   socket.emit('wa:status', userWa.getStatus());
   socket.emit('campaign:status', userQueue.getCurrentState());
@@ -376,4 +381,9 @@ server.listen(PORT, async () => {
   console.log(`📡 Socket.IO gateway ready for Vercel / Remote Clients`);
   console.log(`🔒 Multi-Session Workspace Isolation: ACTIVE`);
   console.log(`====================================================`);
+
+  // Auto-restore any paired WhatsApp sessions on startup
+  if (typeof waManager.autoRestoreSessions === 'function') {
+    waManager.autoRestoreSessions(io);
+  }
 });

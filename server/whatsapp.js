@@ -30,10 +30,13 @@ class WhatsAppManager {
     this.qrCodeDataUrl = null;
     this.rawQR = null;
     this.connectionState = 'disconnected'; // 'disconnected', 'connecting', 'open', 'qr_ready'
-    this.userInfo = null;
+    this.userInfo = this.getUserInfoFromCreds();
     this.io = null;
     this.isInitializing = false;
+    this.isConnecting = false;
+    this.isLoggingOut = false;
     this.reconnectTimeout = null;
+    this.reconnectAttempts = 0;
   }
 
   setSocketIO(io) {
@@ -50,29 +53,84 @@ class WhatsAppManager {
     }
   }
 
+  hasValidSession() {
+    try {
+      const credsPath = path.join(this.authFolder, 'creds.json');
+      if (!fs.existsSync(credsPath)) return false;
+      const raw = fs.readFileSync(credsPath, 'utf8');
+      if (!raw || raw.trim().length === 0) return false;
+      const data = JSON.parse(raw);
+      return Boolean(data && (data.me || data.registered));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  getUserInfoFromCreds() {
+    try {
+      const credsPath = path.join(this.authFolder, 'creds.json');
+      if (!fs.existsSync(credsPath)) return null;
+      const raw = fs.readFileSync(credsPath, 'utf8');
+      if (!raw || raw.trim().length === 0) return null;
+      const data = JSON.parse(raw);
+      if (data && data.me) {
+        const id = data.me.id || '';
+        let name = data.me.name;
+        if (!name && id) {
+          name = id.split('@')[0].split(':')[0];
+        }
+        return {
+          id,
+          name: name || 'WhatsApp Connected User'
+        };
+      }
+    } catch (e) {}
+    return null;
+  }
+
   getStatus() {
+    const validSession = this.hasValidSession();
     return {
       status: this.connectionState,
-      qr: this.qrCodeDataUrl,
-      userInfo: this.userInfo
+      qr: validSession ? null : this.qrCodeDataUrl,
+      userInfo: this.userInfo || this.getUserInfoFromCreds(),
+      hasSession: validSession
     };
   }
 
+  scheduleReconnect(delayMs = 3000) {
+    if (this.isLoggingOut) return;
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectTimeout = null;
+      if (!this.isLoggingOut) {
+        this.init(false).catch((err) => {
+          console.error(`[${this.sessionId}] Reconnection failed:`, err.message);
+        });
+      }
+    }, delayMs);
+  }
+
   async init(force = false) {
-    // If already open and not forced, keep connection alive without re-creating socket
+    // If already open and not forced, preserve session
     if (this.connectionState === 'open' && this.sock && !force) {
-      console.log('WhatsApp connection already open and active. Preserving session.');
+      console.log(`[${this.sessionId}] WhatsApp already active and open. Preserving session.`);
       this.broadcast('wa:status', this.getStatus());
       return;
     }
 
-    // Prevent concurrent initialization attempts
-    if (this.isInitializing) {
-      console.log('WhatsApp initialization already in progress, waiting...');
+    // Single-flight lock: prevent parallel socket creation
+    if (this.isInitializing || this.isConnecting) {
+      console.log(`[${this.sessionId}] WhatsApp connection attempt already in progress, waiting...`);
       return;
     }
 
     this.isInitializing = true;
+    this.isConnecting = true;
 
     if (!makeWASocket) {
       try {
@@ -85,6 +143,7 @@ class WhatsAppManager {
       } catch (err) {
         console.error('Failed to import Baileys:', err.message);
         this.isInitializing = false;
+        this.isConnecting = false;
         return;
       }
     }
@@ -94,13 +153,15 @@ class WhatsAppManager {
         fs.mkdirSync(this.authFolder, { recursive: true });
       }
 
-      // Clean up previous socket listeners to avoid duplicate events and memory leaks
+      // Safely close existing socket before spawning a new one
       if (this.sock) {
         try {
           this.sock.ev.removeAllListeners();
           this.sock.end(undefined);
         } catch (e) {}
         this.sock = null;
+        // Pause to ensure OS socket release & prevent WhatsApp 440 Connection Replaced
+        await new Promise((r) => setTimeout(r, 600));
       }
 
       const { state, saveCreds } = await useMultiFileAuthState(this.authFolder);
@@ -115,13 +176,19 @@ class WhatsAppManager {
         version = [2, 3000, 1015901307];
       }
 
-      // Set connecting state if not already open
+      // Update state without wiping userInfo if already paired
       if (this.connectionState !== 'open') {
         this.connectionState = 'connecting';
+        if (!this.userInfo) {
+          this.userInfo = this.getUserInfoFromCreds();
+        }
         this.broadcast('wa:status', this.getStatus());
       }
 
-      const browserInfo = Browsers?.windows ? Browsers.windows('Desktop') : ['Windows', 'Desktop', '10.0.22631'];
+      // Standard cloud & container browser signature (prevents disconnects on Linux/Render)
+      const browserInfo = Browsers?.ubuntu
+        ? Browsers.ubuntu('Chrome')
+        : ['Ubuntu', 'Chrome', '120.0.6099.109'];
 
       this.sock = makeWASocket({
         version,
@@ -131,10 +198,11 @@ class WhatsAppManager {
         browser: browserInfo,
         syncFullHistory: false,
         generateHighQualityLinkPreview: false,
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000,
-        keepAliveIntervalMs: 15000,
-        markOnlineOnConnect: true,
+        connectTimeoutMs: 90000,
+        defaultQueryTimeoutMs: 90000,
+        keepAliveIntervalMs: 20000, // Sends keep-alive ping every 20s to prevent cloud proxy disconnects
+        markOnlineOnConnect: false,
+        retryRequestDelayMs: 2500,
         emitOwnEvents: false
       });
 
@@ -143,58 +211,78 @@ class WhatsAppManager {
       this.sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // QR Code generated
+        // QR Code generated for pairing
         if (qr) {
-          this.rawQR = qr;
-          try {
-            this.qrCodeDataUrl = await QRCode.toDataURL(qr, { margin: 2, scale: 8 });
-            this.connectionState = 'qr_ready';
-            this.broadcast('wa:qr', { qr: this.qrCodeDataUrl });
-            this.broadcast('wa:status', this.getStatus());
-            console.log('New WhatsApp pairing QR Code generated.');
-          } catch (err) {
-            console.error('Error rendering QR Code:', err);
+          // If valid paired credentials already exist, ignore spurious QR to keep session permanent
+          if (!this.hasValidSession()) {
+            this.rawQR = qr;
+            try {
+              this.qrCodeDataUrl = await QRCode.toDataURL(qr, { margin: 2, scale: 8 });
+              this.connectionState = 'qr_ready';
+              this.broadcast('wa:qr', { qr: this.qrCodeDataUrl });
+              this.broadcast('wa:status', this.getStatus());
+              console.log(`[${this.sessionId}] New WhatsApp pairing QR Code generated.`);
+            } catch (err) {
+              console.error('Error rendering QR Code:', err);
+            }
+          } else {
+            console.log(`[${this.sessionId}] QR received while valid session exists. Suppressing to preserve session.`);
           }
         }
 
         // Connection closed
         if (connection === 'close') {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const isLoggedOut = statusCode === DisconnectReason?.loggedOut;
           const isRestartRequired = statusCode === DisconnectReason?.restartRequired || statusCode === 515;
+          const isReplaced = statusCode === DisconnectReason?.connectionReplaced || statusCode === 440;
 
-          console.log(`WhatsApp connection closed (statusCode: ${statusCode}). Reconnecting...`);
+          console.log(`[${this.sessionId}] WhatsApp connection closed (statusCode: ${statusCode || 'unknown'}).`);
 
-          if (isLoggedOut) {
-            // User explicitly logged out from device or app
-            console.log('WhatsApp account was logged out. Clearing session.');
-            this.connectionState = 'disconnected';
-            this.qrCodeDataUrl = null;
-            this.userInfo = null;
-            this.clearAuth();
-            this.broadcast('wa:status', this.getStatus());
-            this.isInitializing = false;
-            // Generate a fresh QR code
-            setTimeout(() => this.init(true), 1500);
+          // If manual unlink was requested, do not auto-reconnect
+          if (this.isLoggingOut) {
+            console.log(`[${this.sessionId}] Manual logout/unlink in progress. No reconnect scheduled.`);
             return;
           }
 
-          // For all other disconnects (restart required 515, network blips, server restarts):
-          // Maintain user state and silently auto-reconnect immediately so the user stays permanently connected!
+          this.isConnecting = false;
           this.isInitializing = false;
-          if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
 
-          const delay = isRestartRequired ? 500 : 2500;
-          this.reconnectTimeout = setTimeout(() => {
-            console.log('Re-establishing WhatsApp multi-device connection...');
-            this.init(true);
-          }, delay);
+          // If account is already paired, DO NOT CLEAR AUTH!
+          // Maintain user session permanently and silently reconnect
+          if (this.hasValidSession()) {
+            this.connectionState = 'connecting';
+            if (!this.userInfo) {
+              this.userInfo = this.getUserInfoFromCreds();
+            }
+            this.broadcast('wa:status', this.getStatus());
+
+            if (isReplaced) {
+              console.log(`[${this.sessionId}] Connection replaced (440). Backing off for 12s to prevent conflict...`);
+              this.scheduleReconnect(12000);
+              return;
+            }
+
+            const delay = isRestartRequired ? 2000 : 4000;
+            console.log(`[${this.sessionId}] Silently reconnecting in ${delay}ms...`);
+            this.scheduleReconnect(delay);
+          } else {
+            // Not paired yet: allow QR generation
+            this.connectionState = 'disconnected';
+            this.broadcast('wa:status', this.getStatus());
+            this.scheduleReconnect(3000);
+          }
         } else if (connection === 'open') {
-          console.log('✅ WhatsApp connection opened and permanently linked!');
+          console.log(`[${this.sessionId}] ✅ WhatsApp connection opened and permanently linked!`);
           this.connectionState = 'open';
           this.qrCodeDataUrl = null;
+          this.isConnecting = false;
           this.isInitializing = false;
-          if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+          this.reconnectAttempts = 0;
+
+          if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = null;
+          }
 
           // Extract user info
           let userJid = this.sock?.user?.id || '';
@@ -212,44 +300,61 @@ class WhatsAppManager {
         }
       });
     } catch (err) {
-      console.error('Error during WhatsApp init:', err);
+      console.error(`[${this.sessionId}] Error during WhatsApp init:`, err.message);
+      this.isConnecting = false;
       this.isInitializing = false;
     } finally {
       this.isInitializing = false;
+      this.isConnecting = false;
     }
   }
 
+  // ONLY called when user explicitly clicks "Unlink WhatsApp" in the UI
   async logout() {
-    console.log('Manual logout triggered by user.');
-    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+    console.log(`[${this.sessionId}] User explicitly clicked Unlink WhatsApp.`);
+    this.isLoggingOut = true;
+
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
 
     try {
       if (this.sock) {
         this.sock.ev.removeAllListeners();
-        await this.sock.logout();
-        this.sock.end(undefined);
+        try {
+          await this.sock.logout();
+        } catch (e) {}
+        try {
+          this.sock.end(undefined);
+        } catch (e) {}
       }
     } catch (e) {
       console.log('Error during logout:', e.message);
     }
 
     this.sock = null;
+    // Strictly ONLY wipe credentials upon explicit manual Unlink
     this.clearAuth();
     this.connectionState = 'disconnected';
     this.qrCodeDataUrl = null;
     this.userInfo = null;
     this.isInitializing = false;
+    this.isConnecting = false;
     this.broadcast('wa:status', this.getStatus());
 
-    // Generate fresh QR code after manual logout
-    setTimeout(() => this.init(true), 1500);
+    // Prepare fresh QR code for the user to pair again if desired
+    setTimeout(() => {
+      this.isLoggingOut = false;
+      this.init(true).catch(() => {});
+    }, 2000);
   }
 
   clearAuth() {
     try {
       if (fs.existsSync(this.authFolder)) {
         fs.rmSync(this.authFolder, { recursive: true, force: true });
-        console.log('Auth credentials cleared.');
+        console.log(`[${this.sessionId}] Auth credentials cleared on manual unlink.`);
       }
     } catch (e) {
       console.error('Error clearing auth folder:', e.message);
@@ -296,13 +401,9 @@ class WhatsAppManager {
       targetJid = `${targetJid}@s.whatsapp.net`;
     }
 
-    // Ensure options is ALWAYS a valid non-null object for Baileys
     const sendOptions = (options && typeof options === 'object') ? options : {};
-
-    // Determine if media is attached (passed as 3rd param or within content object)
     const activeMedia = media || (typeof content === 'object' && (content.mediaPath || content.path) ? content : null);
 
-    // 1. Send Media message with text caption
     if (activeMedia && (activeMedia.path || activeMedia.mediaPath)) {
       const filePath = activeMedia.path || activeMedia.mediaPath;
       const mediaBuffer = fs.readFileSync(filePath);
@@ -337,7 +438,6 @@ class WhatsAppManager {
       }
     }
 
-    // 2. Text only message
     const textMsg = typeof content === 'string' ? content : (content?.text || '');
     return await this.sock.sendMessage(targetJid, { text: textMsg }, sendOptions);
   }
@@ -358,8 +458,39 @@ function getWhatsAppManager(sessionId = 'default', io = null) {
   return waInstances.get(cleanId);
 }
 
+// Auto-restore any existing paired sessions on startup
+function autoRestoreSessions(io) {
+  const rootDir = fs.existsSync(path.join(__dirname, '..', 'package.json'))
+    ? path.join(__dirname, '..')
+    : __dirname;
+  const baseAuth = process.env.AUTH_DIR || path.join(rootDir, 'auth_info_baileys');
+
+  const defaultCreds = path.join(baseAuth, 'creds.json');
+  if (fs.existsSync(defaultCreds)) {
+    console.log('⚡ Auto-restoring default WhatsApp session...');
+    const mgr = getWhatsAppManager('default', io);
+    mgr.init().catch(() => {});
+  }
+
+  const sessionsDir = path.join(baseAuth, 'sessions');
+  if (fs.existsSync(sessionsDir)) {
+    try {
+      const dirs = fs.readdirSync(sessionsDir);
+      for (const sid of dirs) {
+        const credsFile = path.join(sessionsDir, sid, 'creds.json');
+        if (fs.existsSync(credsFile)) {
+          console.log(`⚡ Auto-restoring private WhatsApp session: ${sid}...`);
+          const mgr = getWhatsAppManager(sid, io);
+          mgr.init().catch(() => {});
+        }
+      }
+    } catch (e) {}
+  }
+}
+
 const defaultInstance = getWhatsAppManager('default');
 defaultInstance.WhatsAppManager = WhatsAppManager;
 defaultInstance.getWhatsAppManager = getWhatsAppManager;
+defaultInstance.autoRestoreSessions = autoRestoreSessions;
 
 module.exports = defaultInstance;
