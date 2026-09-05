@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Production Build Output
+client/dist/
+dist/
+
+# WhatsApp Auth Tokens & Credentials (NEVER commit credentials)
+auth_info_baileys/
+server/auth_info_baileys/
+
+# Temporary Uploads
+uploads/*
+!uploads/.gitkeep
+
+# Local data & logs
+data/campaigns.json
+*.log
+
+# Environment Variables
+.env
+.env.local
+.env.production
+.DS_Store

@@ -1,0 +1,36 @@
+{
+  "name": "whatsapp-bulk-sender-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WhatsApp Bulk Sender - Backend Engine (Render & Multi-Device Baileys Ready)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "qrcode": "^1.5.3",
+    "socket.io": "^4.7.5",
+    "uuid": "^9.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "bulk-sender",
+    "baileys",
+    "socketio",
+    "render"
+  ],
+  "author": "",
+  "license": "MIT"
+}

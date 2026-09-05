@@ -1,0 +1,8 @@
+{
+  "minDelay": 5,
+  "maxDelay": 12,
+  "batchSize": 20,
+  "batchPause": 30,
+  "randomizePacing": true,
+  "defaultCountryCode": "91"
+}

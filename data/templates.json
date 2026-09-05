@@ -1,0 +1,14 @@
+[
+  {
+    "id": "tpl_default_1",
+    "name": "Welcome & Greeting",
+    "content": "Hi {{name}}, {Welcome to our service!|Glad to have you with us!|Thank you for connecting with us!}\n\nFeel free to reach out if you have any questions.",
+    "createdAt": "2026-09-05T09:54:10.783Z"
+  },
+  {
+    "id": "tpl_default_2",
+    "name": "Special Offer / Promo",
+    "content": "Hello {{name}}! 🔥\n\n{We have an exclusive offer for you!|Here is a special discount just for you!}\nUse code *PROMO20* for 20% OFF today.\n\nBest regards,\nYour Support Team",
+    "createdAt": "2026-09-05T09:54:10.783Z"
+  }
+]
