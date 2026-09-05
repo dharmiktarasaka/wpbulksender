@@ -1,5 +1,6 @@
 import React from 'react';
-import { Server, Settings, RefreshCw, Sun, Moon } from 'lucide-react';
+import { Server, Settings, RefreshCw, Sun, Moon, Lock } from 'lucide-react';
+import { getSessionId } from '../services/api';
 
 export default function Header({
   activeTab,
@@ -14,6 +15,7 @@ export default function Header({
   onOpenServerModal,
   onRefreshSession
 }) {
+  const sessionId = getSessionId();
   const steps = [
     { id: 'tab-connection', num: 1, label: 'Connect' },
     { id: 'tab-contacts', num: 2, label: 'Contacts' },
@@ -62,6 +64,19 @@ export default function Header({
               : 'Backend: Offline'}
           </span>
           <Server size={14} style={{ marginLeft: 4 }} />
+        </div>
+
+        {/* Private Workspace Pill */}
+        <div
+          className="connection-pill"
+          onClick={onOpenServerModal}
+          style={{ cursor: 'pointer', background: 'var(--bg-card-subtle)' }}
+          title={`Private Workspace ID: ${sessionId}\n100% private to this browser. Other users cannot see your WhatsApp or campaigns.`}
+        >
+          <Lock size={12} color="var(--wa-green)" />
+          <span style={{ fontSize: '0.78rem', fontFamily: 'monospace' }}>
+            {sessionId.length > 10 ? sessionId.substring(0, 8) + '..' : sessionId}
+          </span>
         </div>
 
         {/* WhatsApp Session Pill */}

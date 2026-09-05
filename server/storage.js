@@ -6,13 +6,26 @@ const ROOT_DIR = fs.existsSync(path.join(__dirname, '..', 'package.json'))
   : __dirname;
 
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT_DIR, 'data');
-const HISTORY_FILE = path.join(DATA_DIR, 'campaigns.json');
-const TEMPLATES_FILE = path.join(DATA_DIR, 'templates.json');
-const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
-// Ensure data directory exists
+// Ensure base data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function getSessionDir(sessionId = 'default') {
+  if (!sessionId || sessionId === 'default') {
+    return DATA_DIR;
+  }
+  const cleanId = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const dir = path.join(DATA_DIR, 'sessions', cleanId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+function getSessionFilePath(filename, sessionId = 'default') {
+  return path.join(getSessionDir(sessionId), filename);
 }
 
 function readJsonFile(filePath, defaultValue) {
@@ -37,95 +50,108 @@ function writeJsonFile(filePath, data) {
   }
 }
 
+const DEFAULT_TEMPLATES = [
+  {
+    id: 'tpl_default_1',
+    name: 'Welcome & Greeting',
+    content: 'Hi {{name}}, {Welcome to our service!|Glad to have you with us!|Thank you for connecting with us!}\n\nFeel free to reach out if you have any questions.',
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: 'tpl_default_2',
+    name: 'Special Offer / Promo',
+    content: 'Hello {{name}}! 🔥\n\n{We have an exclusive offer for you!|Here is a special discount just for you!}\nUse code *PROMO20* for 20% OFF today.\n\nBest regards,\nYour Support Team',
+    createdAt: new Date().toISOString()
+  }
+];
+
+const DEFAULT_SETTINGS = {
+  minDelay: 8,
+  maxDelay: 18,
+  batchSize: 15,
+  batchPause: 45,
+  randomizePacing: true,
+  defaultCountryCode: '91'
+};
+
 module.exports = {
-  // Campaign History
-  getCampaigns() {
-    return readJsonFile(HISTORY_FILE, []);
+  // Campaign History (Isolated Per Session)
+  getCampaigns(sessionId = 'default') {
+    const file = getSessionFilePath('campaigns.json', sessionId);
+    return readJsonFile(file, []);
   },
-  getCampaignById(id) {
-    const campaigns = this.getCampaigns();
-    return campaigns.find(c => c.id === id);
+  getCampaignById(id, sessionId = 'default') {
+    const campaigns = this.getCampaigns(sessionId);
+    return campaigns.find((c) => c.id === id);
   },
-  saveCampaign(campaign) {
-    const campaigns = this.getCampaigns();
-    const index = campaigns.findIndex(c => c.id === campaign.id);
+  saveCampaign(campaign, sessionId = 'default') {
+    const file = getSessionFilePath('campaigns.json', sessionId);
+    const campaigns = this.getCampaigns(sessionId);
+    const index = campaigns.findIndex((c) => c.id === campaign.id);
     if (index >= 0) {
       campaigns[index] = campaign;
     } else {
       campaigns.unshift(campaign);
     }
-    // Keep max 100 historical campaigns
+    // Keep max 100 historical campaigns per session
     if (campaigns.length > 100) {
       campaigns.length = 100;
     }
-    writeJsonFile(HISTORY_FILE, campaigns);
+    writeJsonFile(file, campaigns);
     return campaign;
   },
-  deleteCampaign(id) {
-    let campaigns = this.getCampaigns();
-    campaigns = campaigns.filter(c => c.id !== id);
-    writeJsonFile(HISTORY_FILE, campaigns);
+  deleteCampaign(id, sessionId = 'default') {
+    const file = getSessionFilePath('campaigns.json', sessionId);
+    let campaigns = this.getCampaigns(sessionId);
+    campaigns = campaigns.filter((c) => c.id !== id);
+    writeJsonFile(file, campaigns);
     return true;
   },
-  clearCampaigns() {
-    writeJsonFile(HISTORY_FILE, []);
+  clearCampaigns(sessionId = 'default') {
+    const file = getSessionFilePath('campaigns.json', sessionId);
+    writeJsonFile(file, []);
     return true;
   },
 
-  // Templates
-  getTemplates() {
-    return readJsonFile(TEMPLATES_FILE, [
-      {
-        id: 'tpl_default_1',
-        name: 'Welcome & Greeting',
-        content: 'Hi {{name}}, {Welcome to our service!|Glad to have you with us!|Thank you for connecting with us!}\n\nFeel free to reach out if you have any questions.',
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'tpl_default_2',
-        name: 'Special Offer / Promo',
-        content: 'Hello {{name}}! 🔥\n\n{We have an exclusive offer for you!|Here is a special discount just for you!}\nUse code *PROMO20* for 20% OFF today.\n\nBest regards,\nYour Support Team',
-        createdAt: new Date().toISOString()
-      }
-    ]);
+  // Templates (Isolated Per Session)
+  getTemplates(sessionId = 'default') {
+    const file = getSessionFilePath('templates.json', sessionId);
+    return readJsonFile(file, DEFAULT_TEMPLATES);
   },
-  saveTemplate(template) {
-    const templates = this.getTemplates();
+  saveTemplate(template, sessionId = 'default') {
+    const file = getSessionFilePath('templates.json', sessionId);
+    const templates = this.getTemplates(sessionId);
     if (!template.id) {
       template.id = 'tpl_' + Date.now();
       template.createdAt = new Date().toISOString();
       templates.unshift(template);
     } else {
-      const index = templates.findIndex(t => t.id === template.id);
+      const index = templates.findIndex((t) => t.id === template.id);
       if (index >= 0) {
         templates[index] = { ...templates[index], ...template, updatedAt: new Date().toISOString() };
       } else {
         templates.unshift(template);
       }
     }
-    writeJsonFile(TEMPLATES_FILE, templates);
+    writeJsonFile(file, templates);
     return template;
   },
-  deleteTemplate(id) {
-    let templates = this.getTemplates();
-    templates = templates.filter(t => t.id !== id);
-    writeJsonFile(TEMPLATES_FILE, templates);
+  deleteTemplate(id, sessionId = 'default') {
+    const file = getSessionFilePath('templates.json', sessionId);
+    let templates = this.getTemplates(sessionId);
+    templates = templates.filter((t) => t.id !== id);
+    writeJsonFile(file, templates);
     return true;
   },
 
-  // Settings
-  getSettings() {
-    return readJsonFile(SETTINGS_FILE, {
-      minDelay: 5,
-      maxDelay: 12,
-      batchSize: 20,
-      batchPause: 30,
-      randomizePacing: true,
-      defaultCountryCode: '91'
-    });
+  // Settings (Isolated Per Session)
+  getSettings(sessionId = 'default') {
+    const file = getSessionFilePath('settings.json', sessionId);
+    return readJsonFile(file, DEFAULT_SETTINGS);
   },
-  saveSettings(settings) {
-    writeJsonFile(SETTINGS_FILE, settings);
+  saveSettings(settings, sessionId = 'default') {
+    const file = getSessionFilePath('settings.json', sessionId);
+    writeJsonFile(file, settings);
     return settings;
   }
 };

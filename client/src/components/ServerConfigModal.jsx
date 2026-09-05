@@ -174,11 +174,12 @@ export default function ServerConfigModal({
 
           <div
             style={{
-              background: 'rgba(255, 255, 255, 0.03)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              background: 'var(--bg-card-subtle)',
+              border: '1px solid var(--border-color)',
               borderRadius: 8,
               padding: 12,
-              fontSize: '0.82rem'
+              fontSize: '0.82rem',
+              marginBottom: 16
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -207,6 +208,39 @@ export default function ServerConfigModal({
                   : '--'}
               </span>
             </div>
+          </div>
+
+          {/* Privacy & Session Isolation Card */}
+          <div
+            style={{
+              background: 'rgba(16, 185, 129, 0.05)',
+              border: '1px solid rgba(16, 185, 129, 0.2)',
+              borderRadius: 8,
+              padding: 12,
+              fontSize: '0.82rem'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <strong style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--wa-green)' }}>
+                🔒 Private Workspace Isolation
+              </strong>
+              <button
+                type="button"
+                className="btn btn-outline btn-xs"
+                onClick={() => {
+                  if (confirm('Create a new fresh workspace? Your current session and QR code will be reset to a brand new private ID.')) {
+                    localStorage.removeItem('WASENDER_SESSION_ID');
+                    window.location.reload();
+                  }
+                }}
+                title="Generate a new isolated session"
+              >
+                Reset / New Session
+              </button>
+            </div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', margin: 0 }}>
+              Your WhatsApp connection, imported contacts, messages, and campaigns are completely private to this browser session. Other users cannot view or access your account.
+            </p>
           </div>
         </div>
 

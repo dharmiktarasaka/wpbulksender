@@ -49,14 +49,30 @@ const storageEngine = multer.diskStorage({
 });
 const upload = multer({ storage: storageEngine, limits: { fileSize: 50 * 1024 * 1024 } }); // 50MB max
 
-// Middlewares - Full CORS support for standalone Vercel Frontend
+// Middlewares - Full CORS support with x-session-id for isolated multi-tenancy
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-session-id']
 }));
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+
+// Multi-Tenant Private Workspace / Session Middleware
+function sessionMiddleware(req, res, next) {
+  let sid = req.headers['x-session-id'] || req.query.sessionId;
+  if (!sid && req.headers.cookie) {
+    const match = req.headers.cookie.match(/wa_session_id=([^;]+)/);
+    if (match) sid = match[1];
+  }
+  if (!sid || typeof sid !== 'string' || sid.trim().length === 0) {
+    sid = 'default';
+  }
+  req.sessionId = sid.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  res.setHeader('x-session-id', req.sessionId);
+  next();
+}
+app.use(sessionMiddleware);
 
 // Static file hosting for uploads (Media files sent in WhatsApp messages)
 app.use('/uploads', express.static(UPLOADS_DIR));
@@ -67,33 +83,45 @@ if (fs.existsSync(CLIENT_DIR)) {
   app.use(express.static(CLIENT_DIR));
 }
 
-// Pass Socket.IO to managers
+// Pass Socket.IO to default instances
 waManager.setSocketIO(io);
 campaignQueue.setSocketIO(io);
 
-// Socket.io connection
+// Socket.io connection with Private Room Isolation
 io.on('connection', (socket) => {
-  console.log('Client connected to Socket.IO:', socket.id);
-  // Emit current states immediately upon connection
-  socket.emit('wa:status', waManager.getStatus());
-  socket.emit('campaign:status', campaignQueue.getCurrentState());
+  const rawSid = socket.handshake.auth?.sessionId || socket.handshake.query?.sessionId || 'default';
+  const sessionId = String(rawSid).replace(/[^a-zA-Z0-9_-]/g, '_');
+  socket.sessionId = sessionId;
+  socket.join(`session:${sessionId}`);
+
+  console.log(`Client connected to Socket.IO: ${socket.id} (Private Session: ${sessionId})`);
+
+  // Get isolated instances for this specific session
+  const userWa = waManager.getWhatsAppManager(sessionId, io);
+  const userQueue = campaignQueue.getCampaignQueue(sessionId, userWa, io);
+
+  // Emit current states ONLY to this specific connecting client
+  socket.emit('wa:status', userWa.getStatus());
+  socket.emit('campaign:status', userQueue.getCurrentState());
 
   socket.on('disconnect', () => {
-    console.log('Client disconnected from Socket.IO:', socket.id);
+    console.log(`Client disconnected from Socket.IO: ${socket.id} (Private Session: ${sessionId})`);
   });
 });
 
-// ==================== REST APIs ==================== //
+// ==================== REST APIs (Isolated Per Session) ==================== //
 
 // 1. WhatsApp Endpoints
 app.get('/api/whatsapp/status', (req, res) => {
-  res.json(waManager.getStatus());
+  const userWa = waManager.getWhatsAppManager(req.sessionId, io);
+  res.json(userWa.getStatus());
 });
 
 app.post('/api/whatsapp/init', async (req, res) => {
   try {
-    await waManager.init();
-    res.json({ success: true, message: 'WhatsApp initialization triggered.' });
+    const userWa = waManager.getWhatsAppManager(req.sessionId, io);
+    await userWa.init();
+    res.json({ success: true, message: 'WhatsApp initialization triggered.', sessionId: req.sessionId });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -101,7 +129,8 @@ app.post('/api/whatsapp/init', async (req, res) => {
 
 app.post('/api/whatsapp/logout', async (req, res) => {
   try {
-    await waManager.logout();
+    const userWa = waManager.getWhatsAppManager(req.sessionId, io);
+    await userWa.logout();
     res.json({ success: true, message: 'Logged out successfully.' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -114,9 +143,10 @@ app.post('/api/whatsapp/send-test', async (req, res) => {
     if (!phone) {
       return res.status(400).json({ success: false, error: 'Phone number is required.' });
     }
-    const formatted = waManager.formatPhoneNumber(phone);
+    const userWa = waManager.getWhatsAppManager(req.sessionId, io);
+    const formatted = userWa.formatPhoneNumber(phone);
     const jid = `${formatted}@s.whatsapp.net`;
-    const result = await waManager.sendMessage(jid, message || 'Hello! Test message from WhatsApp Bulk Sender Pro.');
+    const result = await userWa.sendMessage(jid, message || 'Hello! Test message from WhatsApp Bulk Sender Pro.');
     res.json({ success: true, jid, messageId: result?.key?.id, status: 'sent' });
   } catch (err) {
     console.error('Send test error:', err);
@@ -135,45 +165,27 @@ app.post('/api/contacts/parse', upload.single('file'), (req, res) => {
     const workbook = xlsx.readFile(filePath);
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    const rawRows = xlsx.utils.sheet_to_json(sheet, { defval: '' });
+    const rawData = xlsx.utils.sheet_to_json(sheet, { defval: '' });
 
-    // Clean up uploaded temp file
+    // Clean up uploaded file
     try {
       fs.unlinkSync(filePath);
     } catch (e) {}
 
-    if (!rawRows || rawRows.length === 0) {
-      return res.status(400).json({ success: false, error: 'The uploaded sheet is empty.' });
+    if (!rawData || rawData.length === 0) {
+      return res.status(400).json({ success: false, error: 'File contains no data rows.' });
     }
 
-    // Identify columns
-    const columns = Object.keys(rawRows[0]);
-
-    // Detect phone column candidates
-    const phoneCandidates = columns.filter(c =>
-      /phone|mobile|contact|cell|number|whatsapp|tele/i.test(c)
-    );
-    const suggestedPhoneCol = phoneCandidates[0] || columns[0];
-
-    // Detect name column candidates
-    const nameCandidates = columns.filter(c =>
-      /name|client|customer|user|full\s*name|first\s*name/i.test(c)
-    );
-    const suggestedNameCol = nameCandidates[0] || (columns.length > 1 ? columns[1] : columns[0]);
-
+    const columns = Object.keys(rawData[0]);
     res.json({
       success: true,
-      filename: req.file.originalname,
-      totalRows: rawRows.length,
+      totalRows: rawData.length,
       columns,
-      suggestedPhoneCol,
-      suggestedNameCol,
-      previewRows: rawRows.slice(0, 10),
-      allRows: rawRows
+      preview: rawData.slice(0, 5),
+      data: rawData
     });
   } catch (err) {
-    console.error('Error parsing contact file:', err);
-    res.status(500).json({ success: false, error: 'Failed to parse file: ' + err.message });
+    res.status(500).json({ success: false, error: 'Failed to process file: ' + err.message });
   }
 });
 
@@ -181,11 +193,11 @@ app.post('/api/contacts/parse', upload.single('file'), (req, res) => {
 app.post('/api/media/upload', upload.single('media'), (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No media file provided.' });
+      return res.status(400).json({ success: false, error: 'No file uploaded.' });
     }
     res.json({
       success: true,
-      media: {
+      file: {
         filename: req.file.filename,
         originalname: req.file.originalname,
         mimetype: req.file.mimetype,
@@ -199,32 +211,32 @@ app.post('/api/media/upload', upload.single('media'), (req, res) => {
   }
 });
 
-// 4. Templates
+// 4. Templates (Isolated Per Session)
 app.get('/api/templates', (req, res) => {
-  res.json(storage.getTemplates());
+  res.json(storage.getTemplates(req.sessionId));
 });
 
 app.post('/api/templates', (req, res) => {
-  const template = storage.saveTemplate(req.body);
+  const template = storage.saveTemplate(req.body, req.sessionId);
   res.json({ success: true, template });
 });
 
 app.delete('/api/templates/:id', (req, res) => {
-  storage.deleteTemplate(req.params.id);
+  storage.deleteTemplate(req.params.id, req.sessionId);
   res.json({ success: true });
 });
 
-// 5. Settings
+// 5. Settings (Isolated Per Session)
 app.get('/api/settings', (req, res) => {
-  res.json(storage.getSettings());
+  res.json(storage.getSettings(req.sessionId));
 });
 
 app.post('/api/settings', (req, res) => {
-  const settings = storage.saveSettings(req.body);
+  const settings = storage.saveSettings(req.body, req.sessionId);
   res.json({ success: true, settings });
 });
 
-// 6. Campaign Actions
+// 6. Campaign Actions (Isolated Per Session)
 app.post('/api/campaign/start', upload.single('mediaFile'), async (req, res) => {
   try {
     let { name, contacts, template, templates, settings } = req.body;
@@ -252,13 +264,16 @@ app.post('/api/campaign/start', upload.single('mediaFile'), async (req, res) => 
       };
     }
 
-    const result = await campaignQueue.startCampaign({
+    const userWa = waManager.getWhatsAppManager(req.sessionId, io);
+    const userQueue = campaignQueue.getCampaignQueue(req.sessionId, userWa, io);
+
+    const result = await userQueue.startCampaign({
       name,
       contacts,
       template,
       templates,
       media,
-      settings: settings || storage.getSettings()
+      settings: settings || storage.getSettings(req.sessionId)
     });
 
     res.json({ success: true, ...result });
@@ -269,47 +284,51 @@ app.post('/api/campaign/start', upload.single('mediaFile'), async (req, res) => 
 });
 
 app.post('/api/campaign/pause', (req, res) => {
-  const success = campaignQueue.pauseCampaign();
+  const userQueue = campaignQueue.getCampaignQueue(req.sessionId, null, io);
+  const success = userQueue.pauseCampaign();
   res.json({ success, message: success ? 'Campaign paused' : 'No campaign running' });
 });
 
 app.post('/api/campaign/resume', (req, res) => {
-  const success = campaignQueue.resumeCampaign();
+  const userQueue = campaignQueue.getCampaignQueue(req.sessionId, null, io);
+  const success = userQueue.resumeCampaign();
   res.json({ success, message: success ? 'Campaign resumed' : 'No paused campaign to resume' });
 });
 
 app.post('/api/campaign/stop', (req, res) => {
-  const success = campaignQueue.stopCampaign();
+  const userQueue = campaignQueue.getCampaignQueue(req.sessionId, null, io);
+  const success = userQueue.stopCampaign();
   res.json({ success, message: success ? 'Campaign stopped' : 'No active campaign to stop' });
 });
 
 app.get('/api/campaign/status', (req, res) => {
-  res.json(campaignQueue.getCurrentState());
+  const userQueue = campaignQueue.getCampaignQueue(req.sessionId, null, io);
+  res.json(userQueue.getCurrentState());
 });
 
-// 7. Campaign History & Export
+// 7. Campaign History & Export (Isolated Per Session)
 app.get('/api/campaigns', (req, res) => {
-  res.json(storage.getCampaigns());
+  res.json(storage.getCampaigns(req.sessionId));
 });
 
 app.get('/api/campaigns/:id', (req, res) => {
-  const campaign = storage.getCampaignById(req.params.id);
+  const campaign = storage.getCampaignById(req.params.id, req.sessionId);
   if (!campaign) return res.status(404).json({ success: false, error: 'Campaign not found' });
   res.json(campaign);
 });
 
 app.delete('/api/campaigns/:id', (req, res) => {
-  storage.deleteCampaign(req.params.id);
+  storage.deleteCampaign(req.params.id, req.sessionId);
   res.json({ success: true });
 });
 
 app.delete('/api/campaigns', (req, res) => {
-  storage.clearCampaigns();
+  storage.clearCampaigns(req.sessionId);
   res.json({ success: true, message: 'All campaigns deleted.' });
 });
 
 app.get('/api/campaigns/:id/export', (req, res) => {
-  const campaign = storage.getCampaignById(req.params.id);
+  const campaign = storage.getCampaignById(req.params.id, req.sessionId);
   if (!campaign || !campaign.records) {
     return res.status(404).send('Campaign records not found');
   }
@@ -318,8 +337,8 @@ app.get('/api/campaigns/:id/export', (req, res) => {
     Index: i + 1,
     Phone: r.phone,
     Status: r.status,
-    ReasonOrError: r.reason || '',
-    MessageSent: r.message || '',
+    Message: r.message || '',
+    Reason: r.reason || '',
     Timestamp: r.timestamp || ''
   }));
 
@@ -327,19 +346,21 @@ app.get('/api/campaigns/:id/export', (req, res) => {
   const csvOutput = xlsx.utils.sheet_to_csv(worksheet);
 
   res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', `attachment; filename=campaign_${campaign.id}_report.csv`);
+  res.setHeader('Content-Disposition', `attachment; filename="${campaign.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_report.csv"`);
   res.send(csvOutput);
 });
 
-// 8. Health & Ping Check (For Render / Vercel connection testing)
+// 8. Health Check for Render & Uptime Monitors
 app.get('/api/health', (req, res) => {
+  const userWa = waManager.getWhatsAppManager(req.sessionId, io);
   res.json({
     status: 'healthy',
     name: 'WhatsApp Bulk Sender Backend',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.floor(process.uptime()),
-    whatsappConnected: waManager.getStatus().status === 'open'
+    sessionId: req.sessionId,
+    whatsappConnected: userWa.getStatus().status === 'open'
   });
 });
 
@@ -353,13 +374,6 @@ server.listen(PORT, async () => {
   console.log(`🚀 WhatsApp Bulk Sender Backend running on PORT: ${PORT}`);
   console.log(`🌐 Local URL: http://localhost:${PORT}`);
   console.log(`📡 Socket.IO gateway ready for Vercel / Remote Clients`);
+  console.log(`🔒 Multi-Session Workspace Isolation: ACTIVE`);
   console.log(`====================================================`);
-  
-  // Auto init WhatsApp Baileys socket on startup
-  try {
-    await waManager.init();
-  } catch (err) {
-    console.log('WhatsApp will initialize upon connection.');
-  }
 });
-

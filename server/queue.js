@@ -32,8 +32,10 @@ function replaceVariables(template, contactData) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class CampaignQueue extends EventEmitter {
-  constructor() {
+  constructor(sessionId = 'default', customWaManager = null) {
     super();
+    this.sessionId = sessionId;
+    this.waManager = customWaManager || null;
     this.currentCampaign = null;
     this.status = 'idle'; // 'idle', 'running', 'paused', 'stopped'
     this.io = null;
@@ -45,7 +47,11 @@ class CampaignQueue extends EventEmitter {
 
   broadcast(event, data) {
     if (this.io) {
-      this.io.emit(event, data);
+      if (this.sessionId && this.sessionId !== 'default') {
+        this.io.to(`session:${this.sessionId}`).emit(event, data);
+      } else {
+        this.io.emit(event, data);
+      }
     }
   }
 
@@ -70,12 +76,20 @@ class CampaignQueue extends EventEmitter {
     };
   }
 
+  getActiveWa() {
+    if (this.waManager) return this.waManager;
+    if (waManager.getWhatsAppManager) return waManager.getWhatsAppManager(this.sessionId, this.io);
+    return waManager;
+  }
+
   async startCampaign({ name, contacts, template, templates, media, settings }) {
     if (this.status === 'running') {
       throw new Error('A campaign is already currently running.');
     }
 
-    if (waManager.connectionState !== 'open') {
+    const activeWa = this.getActiveWa();
+
+    if (activeWa.connectionState !== 'open') {
       throw new Error('WhatsApp is not connected. Please connect WhatsApp first.');
     }
 
@@ -84,7 +98,7 @@ class CampaignQueue extends EventEmitter {
     }
 
     const campaignId = 'camp_' + uuidv4().substring(0, 8);
-    const activeSettings = { ...storage.getSettings(), ...(settings || {}) };
+    const activeSettings = { ...storage.getSettings(this.sessionId), ...(settings || {}) };
     const minDelay = Math.max(1, parseInt(activeSettings.minDelay) || 5);
     const maxDelay = Math.max(minDelay, parseInt(activeSettings.maxDelay) || 12);
     const batchSize = Math.max(5, parseInt(activeSettings.batchSize) || 20);
@@ -200,8 +214,9 @@ class CampaignQueue extends EventEmitter {
       }
 
       const contact = contacts[i];
+      const activeWa = this.getActiveWa();
       const rawPhone = contact.phone || contact.Phone || contact.mobile || contact.Mobile || contact.number;
-      const formattedNumber = waManager.formatPhoneNumber(rawPhone, defaultCountryCode);
+      const formattedNumber = activeWa.formatPhoneNumber(rawPhone, defaultCountryCode);
 
       if (!formattedNumber) {
         this.currentCampaign.failed++;
@@ -227,7 +242,7 @@ class CampaignQueue extends EventEmitter {
       const recipientJid = `${formattedNumber}@s.whatsapp.net`;
 
       try {
-        await waManager.sendMessage(recipientJid, finalizedMessage, media || null, {});
+        await activeWa.sendMessage(recipientJid, finalizedMessage, media || null, {});
         this.currentCampaign.sent++;
         this.currentCampaign.remaining--;
 
@@ -311,7 +326,7 @@ class CampaignQueue extends EventEmitter {
         'success'
       );
       // Save completed campaign to history
-      storage.saveCampaign(this.currentCampaign);
+      storage.saveCampaign(this.currentCampaign, this.sessionId);
     }
     this.status = 'idle';
     this.broadcast('campaign:status', this.getCurrentState());
@@ -319,4 +334,25 @@ class CampaignQueue extends EventEmitter {
   }
 }
 
-module.exports = new CampaignQueue();
+// Multi-Session Queue Registry
+const campaignQueuesMap = new Map();
+
+function getCampaignQueue(sessionId = 'default', customWa = null, io = null) {
+  const cleanId = String(sessionId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!campaignQueuesMap.has(cleanId)) {
+    const q = new CampaignQueue(cleanId, customWa);
+    if (io) q.setSocketIO(io);
+    campaignQueuesMap.set(cleanId, q);
+  } else {
+    const q = campaignQueuesMap.get(cleanId);
+    if (io && !q.io) q.setSocketIO(io);
+    if (customWa && !q.waManager) q.waManager = customWa;
+  }
+  return campaignQueuesMap.get(cleanId);
+}
+
+const defaultQueue = getCampaignQueue('default');
+defaultQueue.CampaignQueue = CampaignQueue;
+defaultQueue.getCampaignQueue = getCampaignQueue;
+
+module.exports = defaultQueue;

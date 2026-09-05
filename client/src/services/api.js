@@ -1,5 +1,34 @@
 import { io } from 'socket.io-client';
 
+// Generate / retrieve persistent private Session ID
+export function getSessionId() {
+  let sid = localStorage.getItem('WASENDER_SESSION_ID');
+  if (!sid || typeof sid !== 'string' || sid.trim().length === 0) {
+    sid = 'usr_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+    localStorage.setItem('WASENDER_SESSION_ID', sid);
+    try {
+      document.cookie = `wa_session_id=${sid}; path=/; max-age=31536000; SameSite=Lax`;
+    } catch (e) {}
+  }
+  return sid;
+}
+
+export function resetSessionId() {
+  const sid = 'usr_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+  localStorage.setItem('WASENDER_SESSION_ID', sid);
+  try {
+    document.cookie = `wa_session_id=${sid}; path=/; max-age=31536000; SameSite=Lax`;
+  } catch (e) {}
+
+  // Disconnect and reconnect socket to new private session room
+  if (socketInstance) {
+    socketInstance.removeAllListeners();
+    socketInstance.disconnect();
+    socketInstance = null;
+  }
+  return sid;
+}
+
 // Get current backend URL
 export function getBackendUrl() {
   const saved = localStorage.getItem('WASENDER_BACKEND_URL');
@@ -43,12 +72,19 @@ export function setBackendUrl(url) {
 export function getFullApiUrl(endpoint) {
   const base = getBackendUrl();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-  return base + cleanEndpoint;
+  const separator = cleanEndpoint.includes('?') ? '&' : '?';
+  const sid = getSessionId();
+  return `${base}${cleanEndpoint}${separator}sessionId=${encodeURIComponent(sid)}`;
 }
 
 export async function apiFetch(endpoint, options = {}) {
   const url = getFullApiUrl(endpoint);
-  return fetch(url, options);
+  const sid = getSessionId();
+  const headers = {
+    'x-session-id': sid,
+    ...(options.headers || {})
+  };
+  return fetch(url, { ...options, headers });
 }
 
 // Socket manager
@@ -58,14 +94,17 @@ export function getSocket(onStatusChange = null) {
   if (socketInstance) return socketInstance;
 
   const backendUrl = getBackendUrl();
-  console.log('Connecting to Socket.IO at:', backendUrl);
+  const sid = getSessionId();
+  console.log('Connecting to Socket.IO at:', backendUrl, '(Private Session:', sid, ')');
 
   socketInstance = io(backendUrl, {
     transports: ['websocket', 'polling'],
+    auth: { sessionId: sid },
+    query: { sessionId: sid },
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 2000,
-    timeout: 10000
+    timeout: 15000
   });
 
   if (onStatusChange) {
@@ -90,9 +129,14 @@ export function reconnectSocket(onStatusChange = null) {
 export async function testServerPing(customUrl = null) {
   const targetUrl = customUrl ? customUrl.replace(/\/+$/, '') : getBackendUrl();
   const startTime = Date.now();
+  const sid = getSessionId();
 
   try {
-    const res = await fetch(`${targetUrl}/api/health`, { method: 'GET', mode: 'cors' });
+    const res = await fetch(`${targetUrl}/api/health?sessionId=${encodeURIComponent(sid)}`, {
+      method: 'GET',
+      mode: 'cors',
+      headers: { 'x-session-id': sid }
+    });
     const latency = Date.now() - startTime;
     if (res.ok) {
       const data = await res.json();

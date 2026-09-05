@@ -16,12 +16,17 @@ try {
 }
 
 class WhatsAppManager {
-  constructor() {
+  constructor(sessionId = 'default') {
+    this.sessionId = sessionId;
     this.sock = null;
     const rootDir = fs.existsSync(path.join(__dirname, '..', 'package.json'))
       ? path.join(__dirname, '..')
       : __dirname;
-    this.authFolder = process.env.AUTH_DIR || path.join(rootDir, 'auth_info_baileys');
+    const baseAuth = process.env.AUTH_DIR || path.join(rootDir, 'auth_info_baileys');
+    this.authFolder = (!sessionId || sessionId === 'default')
+      ? baseAuth
+      : path.join(baseAuth, 'sessions', sessionId);
+
     this.qrCodeDataUrl = null;
     this.rawQR = null;
     this.connectionState = 'disconnected'; // 'disconnected', 'connecting', 'open', 'qr_ready'
@@ -37,7 +42,11 @@ class WhatsAppManager {
 
   broadcast(event, data) {
     if (this.io) {
-      this.io.emit(event, data);
+      if (this.sessionId && this.sessionId !== 'default') {
+        this.io.to(`session:${this.sessionId}`).emit(event, data);
+      } else {
+        this.io.emit(event, data);
+      }
     }
   }
 
@@ -334,5 +343,23 @@ class WhatsAppManager {
   }
 }
 
-const waManager = new WhatsAppManager();
-module.exports = waManager;
+// Multi-Session Registry
+const waInstances = new Map();
+
+function getWhatsAppManager(sessionId = 'default', io = null) {
+  const cleanId = String(sessionId || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (!waInstances.has(cleanId)) {
+    const mgr = new WhatsAppManager(cleanId);
+    if (io) mgr.setSocketIO(io);
+    waInstances.set(cleanId, mgr);
+  } else if (io && !waInstances.get(cleanId).io) {
+    waInstances.get(cleanId).setSocketIO(io);
+  }
+  return waInstances.get(cleanId);
+}
+
+const defaultInstance = getWhatsAppManager('default');
+defaultInstance.WhatsAppManager = WhatsAppManager;
+defaultInstance.getWhatsAppManager = getWhatsAppManager;
+
+module.exports = defaultInstance;
