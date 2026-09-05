@@ -167,12 +167,12 @@ app.post('/api/contacts/parse', upload.single('file'), (req, res) => {
     }
 
     const filePath = req.file.path;
-    const workbook = xlsx.readFile(filePath);
+    const workbook = xlsx.readFile(filePath, { cellDates: true });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    const rawData = xlsx.utils.sheet_to_json(sheet, { defval: '' });
+    const rawData = xlsx.utils.sheet_to_json(sheet, { defval: '', raw: false });
 
-    // Clean up uploaded file
+    // Clean up uploaded file from disk
     try {
       fs.unlinkSync(filePath);
     } catch (e) {}
@@ -181,14 +181,71 @@ app.post('/api/contacts/parse', upload.single('file'), (req, res) => {
       return res.status(400).json({ success: false, error: 'File contains no data rows.' });
     }
 
-    const columns = Object.keys(rawData[0]);
+    // Trim all column headers and normalize values
+    const cleanData = rawData.map((row) => {
+      const cleanRow = {};
+      for (const key of Object.keys(row)) {
+        const cleanKey = String(key || '').trim();
+        if (cleanKey) {
+          cleanRow[cleanKey] = row[key] !== undefined && row[key] !== null ? String(row[key]).trim() : '';
+        }
+      }
+      return cleanRow;
+    }).filter(row => Object.values(row).some(v => v !== '')); // exclude fully empty rows
+
+    if (cleanData.length === 0) {
+      return res.status(400).json({ success: false, error: 'Spreadsheet has no valid records.' });
+    }
+
+    const columns = Object.keys(cleanData[0]);
+
+    // Intelligent Phone Column Detection
+    const phoneRegex = /^(phone|mobile|contact|whatsapp|number|cell|tel|phone_number|mobile_number|contact_number|cell_phone|tele|mob|ph)$/i;
+    const phonePartialRegex = /phone|mobile|contact|whatsapp|cell|tel|number/i;
+
+    let suggestedPhoneCol = columns.find(c => phoneRegex.test(c.trim())) || '';
+    if (!suggestedPhoneCol) {
+      suggestedPhoneCol = columns.find(c => phonePartialRegex.test(c.trim())) || '';
+    }
+    // Fallback: inspect actual cell values in sample rows
+    if (!suggestedPhoneCol) {
+      for (const col of columns) {
+        let phoneLikeCount = 0;
+        const sampleSize = Math.min(cleanData.length, 15);
+        for (let i = 0; i < sampleSize; i++) {
+          const val = String(cleanData[i][col] || '').replace(/\D/g, '');
+          if (val.length >= 7 && val.length <= 15) {
+            phoneLikeCount++;
+          }
+        }
+        if (phoneLikeCount >= Math.ceil(sampleSize * 0.4)) {
+          suggestedPhoneCol = col;
+          break;
+        }
+      }
+    }
+    if (!suggestedPhoneCol && columns.length > 0) {
+      suggestedPhoneCol = columns[0];
+    }
+
+    // Intelligent Name Column Detection
+    const nameRegex = /^(name|full_name|fullname|contact_name|customer_name|client_name|first_name|firstname|user|username|person)$/i;
+    const namePartialRegex = /name|customer|client|lead|contact/i;
+
+    let suggestedNameCol = columns.find(c => c !== suggestedPhoneCol && nameRegex.test(c.trim())) || '';
+    if (!suggestedNameCol) {
+      suggestedNameCol = columns.find(c => c !== suggestedPhoneCol && namePartialRegex.test(c.trim())) || '';
+    }
+
     res.json({
       success: true,
-      totalRows: rawData.length,
+      totalRows: cleanData.length,
       columns,
-      preview: rawData.slice(0, 5),
-      allRows: rawData,
-      data: rawData
+      suggestedPhoneCol,
+      suggestedNameCol,
+      preview: cleanData.slice(0, 5),
+      allRows: cleanData,
+      data: cleanData
     });
   } catch (err) {
     res.status(500).json({ success: false, error: 'Failed to process file: ' + err.message });

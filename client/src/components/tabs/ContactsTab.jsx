@@ -31,6 +31,30 @@ export default function ContactsTab({
   const [searchQuery, setSearchQuery] = useState('');
   const [isDragging, setIsDragging] = useState(false);
 
+  function cleanPhoneNumber(val, defaultCC = '91') {
+    if (val === null || val === undefined) return '';
+    let str = String(val).trim();
+    if (str.includes('e') || str.includes('E')) {
+      const num = Number(str);
+      if (!isNaN(num)) {
+        str = num.toLocaleString('fullwide', { useGrouping: false });
+      }
+    }
+    let digits = str.replace(/\D/g, '');
+    if (!digits) return '';
+
+    if (digits.startsWith('0') && digits.length > 10) {
+      digits = digits.substring(1);
+    }
+
+    const cleanCC = String(defaultCC || '').replace(/\D/g, '');
+    if (digits.length === 10 && cleanCC) {
+      digits = cleanCC + digits;
+    }
+
+    return digits;
+  }
+
   // File Upload Handler
   async function handleFileUpload(file) {
     if (!file) return;
@@ -48,8 +72,10 @@ export default function ContactsTab({
       if (!data.success) throw new Error(data.error);
 
       setUploadResult(data);
-      setPhoneCol(data.suggestedPhoneCol || data.columns[0]);
-      setNameCol(data.suggestedNameCol || '');
+      const chosenPhone = data.suggestedPhoneCol || (data.columns && data.columns.find(c => /phone|mobile|contact|number/i.test(c))) || (data.columns && data.columns[0]) || '';
+      const chosenName = data.suggestedNameCol || (data.columns && data.columns.find(c => c !== chosenPhone && /name/i.test(c))) || '';
+      setPhoneCol(chosenPhone);
+      setNameCol(chosenName);
       onShowToast(`Loaded ${data.totalRows} rows from ${file.name}`, 'success');
     } catch (err) {
       onShowToast('File parse failed: ' + err.message, 'error');
@@ -59,11 +85,14 @@ export default function ContactsTab({
   // Apply Column Mapping
   function applyMapping() {
     const rows = uploadResult?.allRows || uploadResult?.data || [];
-    if (!uploadResult || !phoneCol) {
+    if (!uploadResult) {
+      return onShowToast('Please upload a spreadsheet first', 'error');
+    }
+    if (!phoneCol) {
       return onShowToast('Please select the phone number column', 'error');
     }
     if (!rows.length) {
-      return onShowToast('No rows found to import', 'error');
+      return onShowToast('No rows found in uploaded file', 'error');
     }
 
     const newContacts = [];
@@ -71,28 +100,53 @@ export default function ContactsTab({
     const cleanCC = countryCode.replace(/[^0-9]/g, '');
 
     rows.forEach((row) => {
-      let rawPhone = String(row[phoneCol] || '').trim();
-      if (!rawPhone) return;
+      // 1. Read phone from mapped column
+      let rawPhone = row[phoneCol];
 
-      let cleanPhone = rawPhone.replace(/[^0-9]/g, '');
-      if (cleanPhone.length <= 10 && cleanCC) {
-        cleanPhone = cleanCC + cleanPhone;
+      // 2. Fallback: if selected column is blank for this row, look for any column with 7-15 digits
+      if (rawPhone === undefined || rawPhone === null || String(rawPhone).trim() === '') {
+        for (const col of Object.keys(row)) {
+          const val = String(row[col] || '').replace(/\D/g, '');
+          if (val.length >= 7 && val.length <= 15) {
+            rawPhone = row[col];
+            break;
+          }
+        }
       }
 
-      if (cleanPhone.length >= 7 && !seen.has(cleanPhone)) {
+      const cleanPhone = cleanPhoneNumber(rawPhone, cleanCC);
+      if (!cleanPhone || cleanPhone.length < 7) return;
+
+      if (!seen.has(cleanPhone)) {
         seen.add(cleanPhone);
+
+        let contactName = '';
+        if (nameCol && row[nameCol] !== undefined && row[nameCol] !== null) {
+          contactName = String(row[nameCol]).trim();
+        }
+
+        // Capture all spreadsheet columns as custom variables (e.g. {{Company}}, {{Plan}})
+        // while guaranteeing clean phone and name are never overwritten
         const contactObj = {
+          ...row,
+          name: contactName,
           phone: cleanPhone,
-          name: nameCol && row[nameCol] ? String(row[nameCol]).trim() : '',
-          rawPhone,
-          ...row
+          rawPhone: String(rawPhone || cleanPhone).trim()
         };
+
         newContacts.push(contactObj);
       }
     });
 
+    if (newContacts.length === 0) {
+      return onShowToast(
+        `Could not extract valid phone numbers from column "${phoneCol}". Please verify column mapping.`,
+        'error'
+      );
+    }
+
     setContacts(newContacts);
-    onShowToast(`Imported ${newContacts.length} valid contacts!`, 'success');
+    onShowToast(`Successfully ingested ${newContacts.length} contacts!`, 'success');
   }
 
   // Manual Add Contacts
