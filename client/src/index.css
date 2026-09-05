@@ -564,18 +564,31 @@ code {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 24px;
+  width: 100%;
+  min-width: 0;
+}
+
+.grid-2-col > *,
+.grid-3-col > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .grid-3-col {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
+  width: 100%;
+  min-width: 0;
 }
 
 .card {
   padding: 24px;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .card-header {
@@ -1244,13 +1257,37 @@ input[type="range"] {
 
   .table-responsive {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     margin-bottom: 10px;
   }
 
   .data-table {
-    min-width: 520px;
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 10px 8px;
+    font-size: 0.8rem;
+  }
+
+  .hide-on-mobile {
+    display: none !important;
+  }
+
+  .show-on-mobile {
+    display: block !important;
+  }
+
+  .col-idx {
+    width: 28px;
+    text-align: center;
+    padding-left: 4px !important;
+    padding-right: 4px !important;
   }
 
   .toast-container {
@@ -1390,3 +1427,114 @@ input[type="range"] {
     font-size: 0.85rem;
   }
 }
+
+/* =========================================================
+   Modern Micro-Animations & Attractive Aesthetic FX
+   ========================================================= */
+
+.show-on-mobile {
+  display: none;
+}
+
+/* Smooth Tab Entrance */
+@keyframes tabSlideFadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.995);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.tab-panel.active {
+  animation: tabSlideFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Table Row Staggered Fade-in Animation */
+@keyframes rowFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.data-table tbody tr {
+  animation: rowFadeIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.data-table tbody tr:nth-child(1) { animation-delay: 0.02s; }
+.data-table tbody tr:nth-child(2) { animation-delay: 0.04s; }
+.data-table tbody tr:nth-child(3) { animation-delay: 0.06s; }
+.data-table tbody tr:nth-child(4) { animation-delay: 0.08s; }
+.data-table tbody tr:nth-child(5) { animation-delay: 0.10s; }
+.data-table tbody tr:nth-child(6) { animation-delay: 0.12s; }
+
+/* Status Beacon Animation */
+@keyframes statusBeacon {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.status-dot.connected,
+.pill-dot {
+  animation: statusBeacon 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+/* Button & Badge Glow Pulse */
+@keyframes buttonPulseGlow {
+  0%, 100% {
+    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+  }
+  50% {
+    box-shadow: 0 6px 22px rgba(16, 185, 129, 0.58);
+  }
+}
+
+.btn-primary {
+  animation: buttonPulseGlow 3.5s infinite ease-in-out;
+}
+
+/* Floating QR Code Frame Animation */
+@keyframes floatQr {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.qr-scanner-box {
+  animation: floatQr 4s ease-in-out infinite;
+}
+
+/* Shimmer on Pro & Safe Badges */
+@keyframes badgeShimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.badge-pro,
+.badge-whatsapp {
+  background-size: 200% 100%;
+}
+

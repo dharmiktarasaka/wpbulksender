@@ -456,11 +456,11 @@ export default function ContactsTab({
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>#</th>
+                    <th className="col-idx">#</th>
                     <th>Phone</th>
                     <th>Name</th>
-                    <th>Custom Fields</th>
-                    <th>Action</th>
+                    <th className="hide-on-mobile">Custom Fields</th>
+                    <th style={{ textAlign: 'right' }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -470,12 +470,19 @@ export default function ContactsTab({
                     );
                     return (
                       <tr key={idx}>
-                        <td>{idx + 1}</td>
-                        <td>
-                          <strong>+{c.phone}</strong>
+                        <td className="col-idx" style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+                          {idx + 1}
                         </td>
-                        <td>{c.name || <span className="text-muted">-</span>}</td>
                         <td>
+                          <strong style={{ fontSize: '0.88rem', letterSpacing: '-0.2px' }}>+{c.phone}</strong>
+                          {customKeys.length > 0 && (
+                            <div className="show-on-mobile" style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                              {customKeys.length} vars ({customKeys.slice(0, 2).join(', ')})
+                            </div>
+                          )}
+                        </td>
+                        <td>{c.name || <span className="text-muted" style={{ fontSize: '0.78rem' }}>-</span>}</td>
+                        <td className="hide-on-mobile">
                           {customKeys.length > 0 ? (
                             <span className="badge badge-outline" style={{ fontSize: '0.7rem' }}>
                               {customKeys.length} vars ({customKeys.slice(0, 2).join(', ')})
@@ -486,13 +493,14 @@ export default function ContactsTab({
                             </span>
                           )}
                         </td>
-                        <td>
+                        <td style={{ textAlign: 'right' }}>
                           <button
                             className="btn btn-outline btn-xs"
                             onClick={() => onEditContact(c)}
                             title="Edit details & custom fields"
+                            style={{ padding: '5px 8px' }}
                           >
-                            <Edit2 size={12} /> Edit
+                            <Edit2 size={12} /> <span className="hide-on-mobile">Edit</span>
                           </button>
                         </td>
                       </tr>
@@ -504,8 +512,12 @@ export default function ContactsTab({
           </div>
 
           {contacts.length > 0 && (
-            <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end' }}>
-              <button className="btn btn-primary btn-sm" onClick={onNext}>
+            <div style={{ marginTop: 16 }}>
+              <button
+                className="btn btn-primary btn-sm btn-proceed-mobile"
+                onClick={onNext}
+                style={{ width: '100%', justifyContent: 'center' }}
+              >
                 Proceed to Message Composer ➔
               </button>
             </div>
