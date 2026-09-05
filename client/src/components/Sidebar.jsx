@@ -6,7 +6,8 @@ import {
   ShieldCheck,
   Activity,
   Lock,
-  CheckCircle
+  CheckCircle,
+  X
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -16,7 +17,9 @@ export default function Sidebar({
   waStatus,
   waUser,
   contactCount,
-  isCampaignRunning
+  isCampaignRunning,
+  isMobileNavOpen,
+  onCloseMobileNav
 }) {
   const navItems = [
     {
@@ -78,68 +81,87 @@ export default function Sidebar({
   }
 
   return (
-    <aside className="sidebar">
-      {/* Brand Header */}
-      <div className="brand">
-        <div className="brand-icon">
-          <i className="fa-brands fa-whatsapp"></i>
+    <>
+      {/* Mobile Backdrop Overlay */}
+      {isMobileNavOpen && (
+        <div className="sidebar-backdrop" onClick={onCloseMobileNav} />
+      )}
+
+      <aside className={`sidebar ${isMobileNavOpen ? 'open' : ''}`}>
+        {/* Brand Header */}
+        <div className="brand">
+          <div className="brand-icon">
+            <i className="fa-brands fa-whatsapp"></i>
+          </div>
+          <div className="brand-text">
+            <h2>
+              WASender<span className="badge-pro">PRO</span>
+            </h2>
+            <span className="sub-text">Smart Campaign Suite</span>
+          </div>
+          {/* Mobile Close Button */}
+          <button
+            className="btn-close mobile-close-btn"
+            onClick={onCloseMobileNav}
+            title="Close menu"
+            aria-label="Close menu"
+          >
+            <X size={20} />
+          </button>
         </div>
-        <div className="brand-text">
-          <h2>
-            WASender<span className="badge-pro">PRO</span>
-          </h2>
-          <span className="sub-text">Smart Campaign Suite</span>
+
+        {/* WhatsApp Status Card */}
+        <div className="sidebar-status-card">
+          <div className="status-indicator-wrapper">
+            <span className={statusDotClass} />
+            <span className="status-label">{statusLabel}</span>
+          </div>
+          <div className="user-detail">{userDetail}</div>
         </div>
-      </div>
 
-      {/* WhatsApp Status Card */}
-      <div className="sidebar-status-card">
-        <div className="status-indicator-wrapper">
-          <span className={statusDotClass} />
-          <span className="status-label">{statusLabel}</span>
-        </div>
-        <div className="user-detail">{userDetail}</div>
-      </div>
+        {/* Navigation Tabs */}
+        <nav className="nav-menu">
+          {navItems.map((item) => {
+            return (
+              <button
+                key={item.id}
+                className={`nav-btn ${activeTab === item.id ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveTab(item.id);
+                  if (onCloseMobileNav) onCloseMobileNav();
+                }}
+              >
+                <span className="step-num">{item.num}</span>
+                <div className="nav-btn-content">
+                  <span className="nav-title">{item.title}</span>
+                  <span className="nav-desc">{item.desc}</span>
+                </div>
 
-      {/* Navigation Tabs */}
-      <nav className="nav-menu">
-        {navItems.map((item) => {
-          return (
-            <button
-              key={item.id}
-              className={`nav-btn ${activeTab === item.id ? 'active' : ''}`}
-              onClick={() => setActiveTab(item.id)}
-            >
-              <span className="step-num">{item.num}</span>
-              <div className="nav-btn-content">
-                <span className="nav-title">{item.title}</span>
-                <span className="nav-desc">{item.desc}</span>
-              </div>
+                {item.checked && (
+                  <CheckCircle size={16} color="var(--wa-green)" />
+                )}
+                {item.badge !== undefined && (
+                  <span className="nav-count">{item.badge}</span>
+                )}
+                {item.running && (
+                  <span className="pulse-active-badge">LIVE</span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
 
-              {item.checked && (
-                <CheckCircle size={16} color="var(--wa-green)" />
-              )}
-              {item.badge !== undefined && (
-                <span className="nav-count">{item.badge}</span>
-              )}
-              {item.running && (
-                <span className="pulse-active-badge">LIVE</span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Sidebar Footer */}
-      <div className="sidebar-footer">
-        <div className="privacy-notice">
-          <Lock size={18} color="var(--wa-green)" style={{ flexShrink: 0, marginTop: 2 }} />
-          <div>
-            <strong>100% Privacy Protected</strong>
-            <p>Your contacts and session remain completely private on your local machine.</p>
+        {/* Sidebar Footer */}
+        <div className="sidebar-footer">
+          <div className="privacy-notice">
+            <Lock size={18} color="var(--wa-green)" style={{ flexShrink: 0, marginTop: 2 }} />
+            <div>
+              <strong>100% Privacy Protected</strong>
+              <p>Your contacts and session remain completely private on your local machine.</p>
+            </div>
           </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 }

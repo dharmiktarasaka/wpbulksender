@@ -1,5 +1,5 @@
 import React from 'react';
-import { Server, Settings, RefreshCw, Sun, Moon, Lock } from 'lucide-react';
+import { Server, Settings, RefreshCw, Sun, Moon, Lock, Menu } from 'lucide-react';
 import { getSessionId } from '../services/api';
 
 export default function Header({
@@ -13,7 +13,8 @@ export default function Header({
   theme = 'light',
   onToggleTheme,
   onOpenServerModal,
-  onRefreshSession
+  onRefreshSession,
+  onToggleMobileNav
 }) {
   const sessionId = getSessionId();
   const steps = [
@@ -30,19 +31,29 @@ export default function Header({
   return (
     <header className="top-bar">
       <div className="top-title">
-        <div className="wizard-stepper">
-          {steps.map((step, idx) => (
-            <React.Fragment key={step.id}>
-              <div
-                className={`step-pill ${activeTab === step.id ? 'active' : ''}`}
-                onClick={() => setActiveTab(step.id)}
-              >
-                <span className="step-circle">{step.num}</span>
-                <span>{step.label}</span>
-              </div>
-              {idx < steps.length - 1 && <div className="step-divider" />}
-            </React.Fragment>
-          ))}
+        <div className="top-title-row">
+          <button
+            className="btn btn-outline btn-sm mobile-menu-btn"
+            onClick={onToggleMobileNav}
+            title="Toggle Menu"
+            aria-label="Toggle menu"
+          >
+            <Menu size={18} />
+          </button>
+          <div className="wizard-stepper">
+            {steps.map((step, idx) => (
+              <React.Fragment key={step.id}>
+                <div
+                  className={`step-pill ${activeTab === step.id ? 'active' : ''}`}
+                  onClick={() => setActiveTab(step.id)}
+                >
+                  <span className="step-circle">{step.num}</span>
+                  <span>{step.label}</span>
+                </div>
+                {idx < steps.length - 1 && <div className="step-divider" />}
+              </React.Fragment>
+            ))}
+          </div>
         </div>
         <h1>{tabMeta[activeTab]?.title || 'WhatsApp Bulk Sender'}</h1>
         <p>{tabMeta[activeTab]?.subtitle || 'Smart campaign suite'}</p>

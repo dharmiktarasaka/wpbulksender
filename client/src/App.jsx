@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import {
+  QrCode,
+  Users,
+  PenTool,
+  ShieldCheck,
+  Activity
+} from 'lucide-react';
+import {
   getSocket,
   reconnectSocket,
   getBackendUrl,
@@ -45,6 +52,7 @@ const tabMeta = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('tab-connection');
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   // Theme State: 'light' (Default) | 'dark'
   const [theme, setTheme] = useState(() => {
@@ -265,6 +273,8 @@ export default function App() {
         waUser={waUser}
         contactCount={contacts.length}
         isCampaignRunning={isCampaignRunning}
+        isMobileNavOpen={isMobileNavOpen}
+        onCloseMobileNav={() => setIsMobileNavOpen(false)}
       />
 
       {/* Main Content */}
@@ -281,6 +291,7 @@ export default function App() {
           onToggleTheme={toggleTheme}
           onOpenServerModal={() => setIsServerModalOpen(true)}
           onRefreshSession={handleRefreshSession}
+          onToggleMobileNav={() => setIsMobileNavOpen((prev) => !prev)}
         />
 
         {/* Tab 1: Connect */}
@@ -381,6 +392,52 @@ export default function App() {
         campaign={viewingCampaign}
         onClose={() => setViewingCampaign(null)}
       />
+
+      {/* Mobile Bottom Navigation Bar */}
+      <nav className="mobile-bottom-bar">
+        <button
+          className={`mobile-bottom-item ${activeTab === 'tab-connection' ? 'active' : ''}`}
+          onClick={() => setActiveTab('tab-connection')}
+        >
+          <QrCode size={18} />
+          <span>Connect</span>
+          {isWaConnected && <span className="mobile-tab-dot" />}
+        </button>
+
+        <button
+          className={`mobile-bottom-item ${activeTab === 'tab-contacts' ? 'active' : ''}`}
+          onClick={() => setActiveTab('tab-contacts')}
+        >
+          <Users size={18} />
+          <span>Contacts</span>
+          {contacts.length > 0 && <span className="mobile-tab-badge">{contacts.length}</span>}
+        </button>
+
+        <button
+          className={`mobile-bottom-item ${activeTab === 'tab-composer' ? 'active' : ''}`}
+          onClick={() => setActiveTab('tab-composer')}
+        >
+          <PenTool size={18} />
+          <span>Message</span>
+        </button>
+
+        <button
+          className={`mobile-bottom-item ${activeTab === 'tab-settings' ? 'active' : ''}`}
+          onClick={() => setActiveTab('tab-settings')}
+        >
+          <ShieldCheck size={18} />
+          <span>Safety</span>
+        </button>
+
+        <button
+          className={`mobile-bottom-item ${activeTab === 'tab-console' ? 'active' : ''}`}
+          onClick={() => setActiveTab('tab-console')}
+        >
+          <Activity size={18} />
+          <span>Monitor</span>
+          {isCampaignRunning && <span className="mobile-tab-pulse" />}
+        </button>
+      </nav>
 
       {/* Toast Notifications */}
       <div className="toast-container">
