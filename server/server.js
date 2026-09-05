@@ -187,6 +187,7 @@ app.post('/api/contacts/parse', upload.single('file'), (req, res) => {
       totalRows: rawData.length,
       columns,
       preview: rawData.slice(0, 5),
+      allRows: rawData,
       data: rawData
     });
   } catch (err) {

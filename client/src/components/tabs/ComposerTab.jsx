@@ -179,12 +179,14 @@ export default function ComposerTab({
 
   // Extract all custom variables from contacts
   const customTags = new Set(['name', 'phone']);
-  contacts.forEach((c) => {
-    Object.keys(c).forEach((k) => {
-      if (!['rawPhone'].includes(k)) {
-        customTags.add(k);
-      }
-    });
+  (contacts || []).forEach((c) => {
+    if (c && typeof c === 'object') {
+      Object.keys(c).forEach((k) => {
+        if (!['rawPhone'].includes(k)) {
+          customTags.add(k);
+        }
+      });
+    }
   });
 
   return (

@@ -52,14 +52,14 @@ export default function ContactEditModal({
 
     // Clean old custom fields
     const standardKeys = ['phone', 'name', 'rawPhone'];
-    Object.keys(updatedContact).forEach((k) => {
+    Object.keys(updatedContact || {}).forEach((k) => {
       if (!standardKeys.includes(k)) {
         delete updatedContact[k];
       }
     });
 
     // Add new fields
-    customFields.forEach(({ key, value }) => {
+    (customFields || []).forEach(({ key, value }) => {
       if (key && key.trim()) {
         updatedContact[key.trim()] = value;
       }

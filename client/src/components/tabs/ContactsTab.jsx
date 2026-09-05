@@ -58,15 +58,19 @@ export default function ContactsTab({
 
   // Apply Column Mapping
   function applyMapping() {
+    const rows = uploadResult?.allRows || uploadResult?.data || [];
     if (!uploadResult || !phoneCol) {
       return onShowToast('Please select the phone number column', 'error');
+    }
+    if (!rows.length) {
+      return onShowToast('No rows found to import', 'error');
     }
 
     const newContacts = [];
     const seen = new Set();
     const cleanCC = countryCode.replace(/[^0-9]/g, '');
 
-    uploadResult.allRows.forEach((row) => {
+    rows.forEach((row) => {
       let rawPhone = String(row[phoneCol] || '').trim();
       if (!rawPhone) return;
 
