@@ -1,8 +1,12 @@
 {
-  "minDelay": 5,
-  "maxDelay": 12,
-  "batchSize": 20,
-  "batchPause": 30,
+  "minDelay": 15,
+  "maxDelay": 45,
+  "batchSize": 5,
+  "batchPause": 120,
+  "hourlyLimitEnabled": true,
+  "maxPerHour": 5,
+  "neverRepeatDelay": true,
+  "simulateTyping": true,
   "randomizePacing": true,
   "defaultCountryCode": "91"
 }

@@ -70,6 +70,10 @@ const DEFAULT_SETTINGS = {
   maxDelay: 18,
   batchSize: 15,
   batchPause: 45,
+  hourlyLimitEnabled: true,
+  maxPerHour: 5,
+  neverRepeatDelay: true,
+  simulateTyping: true,
   randomizePacing: true,
   defaultCountryCode: '91'
 };
@@ -147,7 +151,8 @@ module.exports = {
   // Settings (Isolated Per Session)
   getSettings(sessionId = 'default') {
     const file = getSessionFilePath('settings.json', sessionId);
-    return readJsonFile(file, DEFAULT_SETTINGS);
+    const existing = readJsonFile(file, DEFAULT_SETTINGS);
+    return { ...DEFAULT_SETTINGS, ...(existing || {}) };
   },
   saveSettings(settings, sessionId = 'default') {
     const file = getSessionFilePath('settings.json', sessionId);

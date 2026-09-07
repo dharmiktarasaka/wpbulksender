@@ -39,6 +39,8 @@ class CampaignQueue extends EventEmitter {
     this.currentCampaign = null;
     this.status = 'idle'; // 'idle', 'running', 'paused', 'stopped'
     this.io = null;
+    this.sentTimestamps = []; // sliding window timestamps of sent messages
+    this.recentDelays = [];   // history of delay intervals to ensure non-repetition
   }
 
   setSocketIO(io) {
@@ -56,11 +58,27 @@ class CampaignQueue extends EventEmitter {
   }
 
   getCurrentState() {
+    const oneHourAgo = Date.now() - 3600 * 1000;
+    const sentInLastHour = this.sentTimestamps ? this.sentTimestamps.filter(t => t > oneHourAgo).length : 0;
+
     if (!this.currentCampaign) {
-      return { status: 'idle', campaign: null };
+      return {
+        status: 'idle',
+        campaign: null,
+        hourlyUsage: {
+          sentInLastHour,
+          maxPerHour: 5,
+          hourlyLimitEnabled: true
+        }
+      };
     }
     return {
       status: this.status,
+      hourlyUsage: {
+        sentInLastHour,
+        maxPerHour: this.currentCampaign.settings?.maxPerHour || 5,
+        hourlyLimitEnabled: this.currentCampaign.settings?.hourlyLimitEnabled ?? true
+      },
       campaign: {
         id: this.currentCampaign.id,
         name: this.currentCampaign.name,
@@ -68,6 +86,7 @@ class CampaignQueue extends EventEmitter {
         sent: this.currentCampaign.sent,
         failed: this.currentCampaign.failed,
         remaining: this.currentCampaign.remaining,
+        settings: this.currentCampaign.settings,
         currentProgress: this.currentCampaign.total > 0
           ? Math.round(((this.currentCampaign.sent + this.currentCampaign.failed) / this.currentCampaign.total) * 100)
           : 0,
@@ -99,11 +118,15 @@ class CampaignQueue extends EventEmitter {
 
     const campaignId = 'camp_' + uuidv4().substring(0, 8);
     const activeSettings = { ...storage.getSettings(this.sessionId), ...(settings || {}) };
-    const minDelay = Math.max(1, parseInt(activeSettings.minDelay) || 5);
-    const maxDelay = Math.max(minDelay, parseInt(activeSettings.maxDelay) || 12);
-    const batchSize = Math.max(5, parseInt(activeSettings.batchSize) || 20);
+    const minDelay = Math.max(1, parseInt(activeSettings.minDelay) || 8);
+    const maxDelay = Math.max(minDelay, parseInt(activeSettings.maxDelay) || 18);
+    const batchSize = Math.max(1, parseInt(activeSettings.batchSize) || 5);
     const batchPause = Math.max(5, parseInt(activeSettings.batchPause) || 30);
     const defaultCountryCode = activeSettings.defaultCountryCode || '91';
+    const hourlyLimitEnabled = activeSettings.hourlyLimitEnabled !== false;
+    const maxPerHour = Math.max(1, parseInt(activeSettings.maxPerHour) || 5);
+    const neverRepeatDelay = activeSettings.neverRepeatDelay !== false;
+    const simulateTyping = activeSettings.simulateTyping !== false;
 
     let templateList = [];
     if (Array.isArray(templates) && templates.length > 0) {
@@ -116,6 +139,18 @@ class CampaignQueue extends EventEmitter {
       throw new Error('No valid message template provided.');
     }
 
+    const campaignSettings = {
+      minDelay,
+      maxDelay,
+      batchSize,
+      batchPause,
+      defaultCountryCode,
+      hourlyLimitEnabled,
+      maxPerHour,
+      neverRepeatDelay,
+      simulateTyping
+    };
+
     this.currentCampaign = {
       id: campaignId,
       name: name || `Campaign ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`,
@@ -125,7 +160,7 @@ class CampaignQueue extends EventEmitter {
       sent: 0,
       failed: 0,
       remaining: contacts.length,
-      settings: { minDelay, maxDelay, batchSize, batchPause, defaultCountryCode },
+      settings: campaignSettings,
       templates: templateList,
       template: templateList.join('\n--- [OR] ---\n'),
       media: media ? { originalname: media.originalname, mimetype: media.mimetype } : null,
@@ -136,10 +171,13 @@ class CampaignQueue extends EventEmitter {
     this.status = 'running';
     this.broadcast('campaign:status', this.getCurrentState());
 
-    this.addLog(`🚀 Campaign "${this.currentCampaign.name}" started with ${contacts.length} recipients & ${templateList.length} rotated template(s).`, 'info');
+    this.addLog(
+      `🚀 Campaign "${this.currentCampaign.name}" started with ${contacts.length} recipients & ${templateList.length} template variation(s). Anti-Ban Active: Max ${maxPerHour} msgs/hr, ${neverRepeatDelay ? 'Non-repeating variable delays' : 'Random delays'}, ${simulateTyping ? 'Typing indicator enabled' : 'Instant send'}.`,
+      'info'
+    );
 
     // Run queue in background
-    this.processQueue(contacts, templateList, media, { minDelay, maxDelay, batchSize, batchPause, defaultCountryCode })
+    this.processQueue(contacts, templateList, media, campaignSettings)
       .catch((err) => {
         this.addLog(`❌ Fatal error in campaign: ${err.message}`, 'error');
         this.finishCampaign('failed');
@@ -194,7 +232,17 @@ class CampaignQueue extends EventEmitter {
   }
 
   async processQueue(contacts, templateList, media, settings) {
-    const { minDelay, maxDelay, batchSize, batchPause, defaultCountryCode } = settings;
+    const {
+      minDelay,
+      maxDelay,
+      batchSize,
+      batchPause,
+      defaultCountryCode,
+      hourlyLimitEnabled,
+      maxPerHour,
+      neverRepeatDelay,
+      simulateTyping
+    } = settings;
 
     let processedCountInBatch = 0;
 
@@ -211,6 +259,41 @@ class CampaignQueue extends EventEmitter {
 
       if (this.status === 'stopped') {
         break;
+      }
+
+      // 1. Sliding Window Hourly Rate Limiter Check (Strictly max X msgs/hr, e.g. 5)
+      if (hourlyLimitEnabled) {
+        let oneHourAgo = Date.now() - 3600 * 1000;
+        this.sentTimestamps = this.sentTimestamps.filter((t) => t > oneHourAgo);
+
+        if (this.sentTimestamps.length >= maxPerHour) {
+          const oldest = this.sentTimestamps[0];
+          const waitMs = Math.max(1000, oldest + 3600 * 1000 - Date.now() + 2000);
+          const waitMins = Math.ceil(waitMs / 60000);
+          this.addLog(
+            `⏳ Anti-Ban Protection: Hourly limit reached (${this.sentTimestamps.length}/${maxPerHour} msgs in last 60m). Pausing for ${waitMins} minute(s) until next available window...`,
+            'pause'
+          );
+          this.broadcast('campaign:status', this.getCurrentState());
+
+          let remainingWaitMs = waitMs;
+          while (remainingWaitMs > 0 && this.status !== 'stopped') {
+            if (this.status === 'paused') {
+              await sleep(1000);
+              continue;
+            }
+            const step = Math.min(1000, remainingWaitMs);
+            await sleep(step);
+            remainingWaitMs -= step;
+          }
+
+          if (this.status === 'stopped') break;
+
+          // Re-evaluate timestamps after waiting
+          oneHourAgo = Date.now() - 3600 * 1000;
+          this.sentTimestamps = this.sentTimestamps.filter((t) => t > oneHourAgo);
+          this.addLog(`▶️ Hourly window unlocked. Resuming sending (${this.sentTimestamps.length}/${maxPerHour} used in rolling hour).`, 'info');
+        }
       }
 
       const contact = contacts[i];
@@ -233,18 +316,28 @@ class CampaignQueue extends EventEmitter {
         continue;
       }
 
-      // 1. Pick a random template from the templateList for anti-ban rotation
+      // 2. Pick a random template from the templateList for anti-ban rotation
       const chosenTemplate = templateList[Math.floor(Math.random() * templateList.length)];
       
-      // 2. Prepare personalized message content with variables and spintax
+      // 3. Prepare personalized message content with variables and spintax
       const filledText = replaceVariables(chosenTemplate, contact);
       const finalizedMessage = parseSpintax(filledText);
       const recipientJid = `${formattedNumber}@s.whatsapp.net`;
+
+      // 4. Simulated Typing Presence (Breaks robotic instant-delivery detection)
+      if (simulateTyping) {
+        const typingDurationMs = Math.floor(Math.random() * 2500) + 1800; // 1.8s to 4.3s
+        this.addLog(`✍️ Simulating human typing indicator for ${(typingDurationMs / 1000).toFixed(1)}s (+${formattedNumber})...`, 'info', formattedNumber);
+        try {
+          await activeWa.simulateTyping(recipientJid, typingDurationMs);
+        } catch (e) {}
+      }
 
       try {
         await activeWa.sendMessage(recipientJid, finalizedMessage, media || null, {});
         this.currentCampaign.sent++;
         this.currentCampaign.remaining--;
+        this.sentTimestamps.push(Date.now());
 
         const successRecord = {
           contact,
@@ -292,12 +385,35 @@ class CampaignQueue extends EventEmitter {
           remainingPause--;
         }
       } else {
-        // Randomized delay between individual messages
-        const randomSeconds = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
-        const randomJitter = Math.floor(Math.random() * 800); // 0-800ms jitter
-        const totalDelayMs = randomSeconds * 1000 + randomJitter;
+        // 5. Dynamic High-Variance Non-Repeating Delay Engine
+        let chosenSeconds;
+        let attempts = 0;
+        do {
+          const base = Math.random() * (maxDelay - minDelay) + minDelay;
+          // Organic non-linear jitter (-15% to +30%)
+          const jitter = 1 + (Math.random() * 0.45 - 0.15);
+          chosenSeconds = Math.round(base * jitter * 10) / 10;
+          chosenSeconds = Math.max(minDelay * 0.75, Math.min(maxDelay * 1.35, chosenSeconds));
+          chosenSeconds = Math.round(chosenSeconds * 10) / 10;
 
-        this.addLog(`⏱️ Waiting ${(totalDelayMs / 1000).toFixed(1)}s (anti-ban delay) before next message...`, 'info');
+          // Never repeat any of the last 5 delays (must differ by at least 1.8s)
+          const isDuplicate = this.recentDelays.slice(-5).some((d) => Math.abs(d - chosenSeconds) < 1.8);
+          if (!neverRepeatDelay || !isDuplicate || attempts > 15) {
+            break;
+          }
+          attempts++;
+        } while (attempts < 20);
+
+        this.recentDelays.push(chosenSeconds);
+        if (this.recentDelays.length > 10) this.recentDelays.shift();
+
+        // Microsecond jitter (100ms - 990ms) ensures timestamps are never mechanical
+        const microJitterMs = Math.floor(Math.random() * 890) + 100;
+        const totalDelayMs = Math.round(chosenSeconds * 1000) + microJitterMs;
+
+        const displaySec = (totalDelayMs / 1000).toFixed(1);
+        const displayMin = totalDelayMs >= 60000 ? ` (~${(totalDelayMs / 60000).toFixed(1)} min)` : '';
+        this.addLog(`⏱️ Non-repeating delay: waiting ${displaySec}s${displayMin} before next message (anti-pattern variance)...`, 'info');
 
         let remainingDelayMs = totalDelayMs;
         while (remainingDelayMs > 0 && this.status !== 'stopped') {

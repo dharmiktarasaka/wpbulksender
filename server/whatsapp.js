@@ -391,6 +391,24 @@ class WhatsAppManager {
     }
   }
 
+  async simulateTyping(toJid, durationMs = 2500) {
+    if (!this.sock || this.connectionState !== 'open') return;
+    let targetJid = toJid;
+    if (!targetJid.includes('@')) {
+      targetJid = `${targetJid}@s.whatsapp.net`;
+    }
+    try {
+      if (typeof this.sock.sendPresenceUpdate === 'function') {
+        await this.sock.sendPresenceUpdate('composing', targetJid);
+        const sleepDuration = Math.max(1000, durationMs);
+        await new Promise((resolve) => setTimeout(resolve, sleepDuration));
+        await this.sock.sendPresenceUpdate('paused', targetJid);
+      }
+    } catch (err) {
+      // Non-fatal if presence update fails on certain connection states
+    }
+  }
+
   async sendMessage(toJid, content, media = null, options = {}) {
     if (!this.sock || this.connectionState !== 'open') {
       throw new Error('WhatsApp is not connected.');

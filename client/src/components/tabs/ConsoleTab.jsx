@@ -147,6 +147,28 @@ export default function ConsoleTab({
             </div>
           </div>
 
+          {/* Anti-Ban Live Hourly Indicator */}
+          {activeCampaign?.hourlyUsage?.hourlyLimitEnabled && (
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '8px 12px',
+              borderRadius: 8,
+              background: 'rgba(37, 211, 102, 0.05)',
+              border: '1px solid rgba(37, 211, 102, 0.18)',
+              marginBottom: 16,
+              fontSize: '0.8rem'
+            }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--wa-green)', fontWeight: 600 }}>
+                🛡️ Anti-Ban Velocity Protection:
+              </span>
+              <span>
+                <strong>{activeCampaign.hourlyUsage.sentInLastHour || 0}</strong> / {activeCampaign.hourlyUsage.maxPerHour || 5} msgs in last 60m
+              </span>
+            </div>
+          )}
+
           {/* Stats Grid */}
           <div className="grid-3-col" style={{ marginBottom: 20 }}>
             <div className="glass-card" style={{ padding: 12, textAlign: 'center', borderRadius: 8 }}>

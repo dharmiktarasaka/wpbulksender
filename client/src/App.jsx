@@ -87,6 +87,10 @@ export default function App() {
     maxDelay: 18,
     batchSize: 15,
     batchPause: 45,
+    hourlyLimitEnabled: true,
+    maxPerHour: 5,
+    neverRepeatDelay: true,
+    simulateTyping: true,
     defaultCountryCode: '91'
   });
   const [campaignName, setCampaignName] = useState('');
